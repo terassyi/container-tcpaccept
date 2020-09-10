@@ -194,7 +194,7 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
 
     // function name
 
-
+    container_events.perf_submit(ctx, &container_data, sizeof(container_data));
     infotmp.update(&pid, &container_data);
 
 
@@ -252,13 +252,14 @@ def print_ipv6_event(cpu, data, size):
         if start_ts == 0:
             start_ts = event.ts_us
         printb(b"%-9.3f" % ((float(event.ts_us) - start_ts) / 1000000), nl="")
-    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-10s" % (event.pid,
+    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-10s %-10s" % (event.pid,
         event.task, event.ip,
         inet_ntop(AF_INET6, event.daddr).encode(),
         event.dport,
         inet_ntop(AF_INET6, event.saddr).encode(),
         event.lport,
-        container_event.container_id))
+        container_event.pid, 
+        container_event.comm))
 
 # initialize BPF
 b = BPF(text=bpf_text)
@@ -268,8 +269,8 @@ if args.time:
     print("%-9s" % ("TIME"), end="")
 if args.timestamp:
     print("%-9s" % ("TIME(s)"), end="")
-print("%-7s %-12s %-2s %-16s %-5s %-16s %-5s" % ("PID", "COMM", "IP", "RADDR",
-    "RPORT", "LADDR", "LPORT"))
+print("%-7s %-12s %-2s %-16s %-5s %-16s %-5s %-10s %-10s" % ("PID", "COMM", "IP", "RADDR",
+    "RPORT", "LADDR", "LPORT", "container pid", "container comm"))
 
 start_ts = 0
 

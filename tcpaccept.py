@@ -235,13 +235,22 @@ if args.port:
         'if (%s) { return 0; }' % lports_if)
 
 if args.container_id:
+    ids = [cid for cid in args.container_id.split(',')]
+    id_array = ' ,'.join(['"%s"' % i for i in ids])
     bpf_text = bpf_text.replace('##FILTER_CONTAINER_ID##', """
-            char target[] = "%s";
-            for (int i = 0; i < 12; i++) {
-                if (target[i] != container_id[i]) {
-                    return 0;
+            int matched  = 0;
+            char target[%d][12] = {%s};
+            for (int i = 0; i < %d; i++) {
+                int j;
+                for (j = 0; j < 12; j++) {
+                    if (target[i][j] != container_id[j]) {
+                        break;
+                    }
                 }
-            }""" % args.container_id)
+                // match
+                if (j == 12) { matched = 1; }
+            }
+            if (matched == 0) { return 0; }""" % (len(ids), id_array, len(ids)))
 else:
     bpf_text = bpf_text.replace('##FILTER_CONTAINER_ID##', '')
 if debug or args.ebpf:

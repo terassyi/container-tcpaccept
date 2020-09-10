@@ -29,6 +29,7 @@ examples = """examples:
     ./tcpaccept -t        # include timestamps
     ./tcpaccept -P 80,81  # only trace port 80 and 81
     ./tcpaccept -p 181    # only trace PID 181
+    ./tcpaccept -c hogehoge # only trace container id hogehoge
 """
 parser = argparse.ArgumentParser(
     description="Trace TCP accepts",
@@ -44,6 +45,8 @@ parser.add_argument("-P", "--port",
     help="comma-separated list of local ports to trace")
 parser.add_argument("--ebpf", action="store_true",
     help=argparse.SUPPRESS)
+parser.add_argument("-c", "--container_id",
+    help="trace this container id only")
 args = parser.parse_args()
 debug = 0
 
@@ -165,9 +168,16 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
         }
         data4.container_pid = (u64)pns->child_reaper->pid;
         // uts namespace
+        char container_id[12];
         struct uts_namespace *uns = (struct uts_namespace *)task->nsproxy->uts_ns;
-        bpf_probe_read(&data4.container_id, sizeof(data4.container_id), (void *)uns->name.nodename);
+        bpf_probe_read(container_id, sizeof(data4.container_id), (void *)uns->name.nodename);
         
+        ##FILTER_CONTAINER_ID##
+
+        for (int i = 0; i < 12; i++) {
+            data4.container_id[i] = container_id[i];
+        }
+
         ipv4_events.perf_submit(ctx, &data4, sizeof(data4));
     } else if (family == AF_INET6) {
         struct ipv6_data_t data6 = {.pid = pid, .ip = 6};
@@ -192,9 +202,15 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
         }
         data6.container_pid = (u64)pns->child_reaper->pid;
         // uts namespace
+        char container_id[12];
         struct uts_namespace *uns = (struct uts_namespace *)task->nsproxy->uts_ns;
-        bpf_probe_read(&data6.container_id, sizeof(data6.container_id), (void *)uns->name.nodename);
+        bpf_probe_read(&container_id, sizeof(data6.container_id), (void *)uns->name.nodename);
 
+        ##FILTER_CONTAINER_ID##
+        
+        for (int i = 0; i < 12; i++) {
+            data6.container_id[i] = container_id[i];
+        }
         ipv6_events.perf_submit(ctx, &data6, sizeof(data6));
     }
     // else drop
@@ -217,6 +233,17 @@ if args.port:
     lports_if = ' && '.join(['lport != %d' % lport for lport in lports])
     bpf_text = bpf_text.replace('##FILTER_PORT##',
         'if (%s) { return 0; }' % lports_if)
+
+if args.container_id:
+    bpf_text = bpf_text.replace('##FILTER_CONTAINER_ID##', """
+            char target[] = "%s";
+            for (int i = 0; i < 12; i++) {
+                if (target[i] != container_id[i]) {
+                    return 0;
+                }
+            }""" % args.container_id)
+else:
+    bpf_text = bpf_text.replace('##FILTER_CONTAINER_ID##', '')
 if debug or args.ebpf:
     print(bpf_text)
     if args.ebpf:

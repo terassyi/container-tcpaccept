@@ -166,7 +166,7 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
             // not container process
             return 0;
         }
-        data4.container_pid = (u64)pns->child_reaper->pid;
+
         // uts namespace
         char container_id[12];
         struct uts_namespace *uns = (struct uts_namespace *)task->nsproxy->uts_ns;
@@ -200,7 +200,7 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
             // not container process
             return 0;
         }
-        data6.container_pid = (u64)pns->child_reaper->pid;
+
         // uts namespace
         char container_id[12];
         struct uts_namespace *uns = (struct uts_namespace *)task->nsproxy->uts_ns;
@@ -214,7 +214,6 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
         ipv6_events.perf_submit(ctx, &data6, sizeof(data6));
     }
     // else drop
-
 
     return 0;
 }
@@ -270,14 +269,13 @@ def print_ipv4_event(cpu, data, size):
         if start_ts == 0:
             start_ts = event.ts_us
         printb(b"%-9.3f" % ((float(event.ts_us) - start_ts) / 1000000), nl="")
-    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-12s %-12d" % (event.pid,
+    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-12s" % (event.pid,
         event.task, event.ip,
         inet_ntop(AF_INET, pack("I", event.daddr)).encode(),
         event.dport,
         inet_ntop(AF_INET, pack("I", event.saddr)).encode(),
         event.lport,
-        event.container_id,
-        event.container_pid))
+        event.container_id))
 
 def print_ipv6_event(cpu, data, size):
     event = b["ipv6_events"].event(data)
@@ -288,14 +286,13 @@ def print_ipv6_event(cpu, data, size):
         if start_ts == 0:
             start_ts = event.ts_us
         printb(b"%-9.3f" % ((float(event.ts_us) - start_ts) / 1000000), nl="")
-    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-12s %-12d" % (event.pid,
+    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-12s" % (event.pid,
         event.task, event.ip,
         inet_ntop(AF_INET6, event.daddr).encode(),
         event.dport,
         inet_ntop(AF_INET6, event.saddr).encode(),
         event.lport,
-        event.container_id,
-        event.container_pid))
+        event.container_id))
 
 # initialize BPF
 b = BPF(text=bpf_text)
@@ -305,8 +302,8 @@ if args.time:
     print("%-9s" % ("TIME"), end="")
 if args.timestamp:
     print("%-9s" % ("TIME(s)"), end="")
-print("%-7s %-12s %-2s %-16s %-5s %-16s %-5s %-12s %-12s" % ("PID", "COMM", "IP", "RADDR",
-    "RPORT", "LADDR", "LPORT", "CONTAINERID", "CONTAINERPID"))
+print("%-7s %-12s %-2s %-16s %-5s %-16s %-5s %-12s" % ("PID", "COMM", "IP", "RADDR",
+    "RPORT", "LADDR", "LPORT", "CONTAINERID"))
 
 start_ts = 0
 

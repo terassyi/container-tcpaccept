@@ -68,6 +68,8 @@ struct ipv4_data_t {
     u16 lport;
     u16 dport;
     char task[TASK_COMM_LEN];
+    char container_id[12];
+    u32 container_pid;
 };
 BPF_PERF_OUTPUT(ipv4_events);
 struct ipv6_data_t {
@@ -79,22 +81,11 @@ struct ipv6_data_t {
     u16 lport;
     u16 dport;
     char task[TASK_COMM_LEN];
+    char container_id[12];
+    u32 container_pid;
 };
 BPF_PERF_OUTPUT(ipv6_events);
 
-// container process information
-struct container_data_t {
-    u32 pid;
-    // u32 uid;
-    // int ret;
-    // char comm[TASK_COMM_LEN];
-    // char fname[70];
-    char container_id[12];
-    // u32 flags;
-};
-BPF_PERF_OUTPUT(container_events);
-
-BPF_HASH(infotmp, u32, struct container_data_t);
 """
 
 #
@@ -161,6 +152,22 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
         data4.lport = lport;
         data4.dport = dport;
         bpf_get_current_comm(&data4.task, sizeof(data4.task));
+
+        struct task_struct *task;
+        task = (struct task_struct *)bpf_get_current_task();
+        // pid namespace
+        struct pid_namespace *pns = (struct pid_namespace *)task->nsproxy->pid_ns_for_children;
+
+        // is container process?
+        if (pns->ns.inum == 0xEFFFFFFCU) {
+            // not container process
+            return 0;
+        }
+        data4.container_pid = (u64)pns->child_reaper->pid;
+        // uts namespace
+        struct uts_namespace *uns = (struct uts_namespace *)task->nsproxy->uts_ns;
+        bpf_probe_read(&data4.container_id, sizeof(data4.container_id), (void *)uns->name.nodename);
+        
         ipv4_events.perf_submit(ctx, &data4, sizeof(data4));
     } else if (family == AF_INET6) {
         struct ipv6_data_t data6 = {.pid = pid, .ip = 6};
@@ -172,38 +179,27 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
         data6.lport = lport;
         data6.dport = dport;
         bpf_get_current_comm(&data6.task, sizeof(data6.task));
+
+        struct task_struct *task;
+        task = (struct task_struct *)bpf_get_current_task();
+        // pid namespace
+        struct pid_namespace *pns = (struct pid_namespace *)task->nsproxy->pid_ns_for_children;
+
+        // is container process?
+        if (pns->ns.inum == 0xEFFFFFFCU) {
+            // not container process
+            return 0;
+        }
+        data6.container_pid = (u64)pns->child_reaper->pid;
+        // uts namespace
+        struct uts_namespace *uns = (struct uts_namespace *)task->nsproxy->uts_ns;
+        bpf_probe_read(&data6.container_id, sizeof(data6.container_id), (void *)uns->name.nodename);
+
         ipv6_events.perf_submit(ctx, &data6, sizeof(data6));
     }
     // else drop
 
-        // get imformation about container
 
-    struct container_data_t container_data = {};
-    
-    struct task_struct *task;
-    task = (struct task_struct *)bpf_get_current_task();
-    // pid namespace
-    struct pid_namespace *pns = (struct pid_namespace *)task->nsproxy->pid_ns_for_children;
-
-    // is container process?
-    if (pns->ns.inum == 0xEFFFFFFCU) {
-        // not container process
-        return 0;
-    }
-    // uts namespace
-    struct uts_namespace *uns = (struct uts_namespace *)task->nsproxy->uts_ns;
-    bpf_probe_read(&container_data.container_id, sizeof(container_data.container_id), (void *)uns->name.nodename);
-
-    // command
-    // bpf_get_current_comm(&container_data.comm, sizeof(container_data.comm));
-
-    // function name
-
-    container_events.perf_submit(ctx, &container_data, sizeof(container_data));
-    infotmp.update(&pid, &container_data);
-
-
-    //
     return 0;
 }
 """
@@ -231,7 +227,6 @@ bpf_text = bpf_text.replace('##FILTER_PORT##', '')
 # process event
 def print_ipv4_event(cpu, data, size):
     event = b["ipv4_events"].event(data)
-    container_event = b["container_events"].event(data)
     global start_ts
     if args.time:
         printb(b"%-9s" % strftime("%H:%M:%S").encode('ascii'), nl="")
@@ -239,18 +234,17 @@ def print_ipv4_event(cpu, data, size):
         if start_ts == 0:
             start_ts = event.ts_us
         printb(b"%-9.3f" % ((float(event.ts_us) - start_ts) / 1000000), nl="")
-    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-10s %-10s" % (event.pid,
+    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-12s %-12d" % (event.pid,
         event.task, event.ip,
         inet_ntop(AF_INET, pack("I", event.daddr)).encode(),
         event.dport,
         inet_ntop(AF_INET, pack("I", event.saddr)).encode(),
         event.lport,
-        container_event.container_id, 
-        container_event.pid))
+        event.container_id,
+        event.container_pid))
 
 def print_ipv6_event(cpu, data, size):
     event = b["ipv6_events"].event(data)
-    container_event = b["container_events"].event(data)
     global start_ts
     if args.time:
         printb(b"%-9s" % strftime("%H:%M:%S").encode('ascii'), nl="")
@@ -258,14 +252,14 @@ def print_ipv6_event(cpu, data, size):
         if start_ts == 0:
             start_ts = event.ts_us
         printb(b"%-9.3f" % ((float(event.ts_us) - start_ts) / 1000000), nl="")
-    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-10s %-10s" % (event.pid,
+    printb(b"%-7d %-12.12s %-2d %-16s %-5d %-16s %-5d %-12s %-12d" % (event.pid,
         event.task, event.ip,
         inet_ntop(AF_INET6, event.daddr).encode(),
         event.dport,
         inet_ntop(AF_INET6, event.saddr).encode(),
         event.lport,
-        container_event.container_id, 
-        container_event.pid))
+        event.container_id,
+        event.container_pid))
 
 # initialize BPF
 b = BPF(text=bpf_text)
@@ -275,7 +269,7 @@ if args.time:
     print("%-9s" % ("TIME"), end="")
 if args.timestamp:
     print("%-9s" % ("TIME(s)"), end="")
-print("%-7s %-12s %-2s %-16s %-5s %-16s %-5s %-10s %-10s" % ("PID", "COMM", "IP", "RADDR",
+print("%-7s %-12s %-2s %-16s %-5s %-16s %-5s %-12s %-12s" % ("PID", "COMM", "IP", "RADDR",
     "RPORT", "LADDR", "LPORT", "CONTAINERID", "CONTAINERPID"))
 
 start_ts = 0
@@ -283,8 +277,7 @@ start_ts = 0
 # read events
 b["ipv4_events"].open_perf_buffer(print_ipv4_event)
 b["ipv6_events"].open_perf_buffer(print_ipv6_event)
-b["container_events"].open_perf_buffer(print_ipv4_event)
-b["container_events"].open_perf_buffer(print_ipv6_event)
+
 while 1:
     try:
         b.perf_buffer_poll()
